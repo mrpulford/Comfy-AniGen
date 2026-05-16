@@ -438,6 +438,7 @@ def render_multiview_mesh_colors(
     near: float = 0.1,
     far: float = 10.0,
     verbose: bool = True,
+    progress_callback=None,
 ):
     """
     Render multiview color images from a mesh with per-vertex colors.
@@ -489,6 +490,8 @@ def render_multiview_mesh_colors(
         observations.append(
             np.clip(color_img.cpu().numpy() * 255, 0, 255).astype(np.uint8)
         )
+        if progress_callback is not None:
+            progress_callback(len(observations) - 1, nviews)
 
     extrinsics_np = [e.cpu().numpy() for e in extrinsics]
     intrinsics_np = [i.cpu().numpy() for i in intrinsics]
@@ -509,6 +512,7 @@ def bake_texture(
     mode: Literal['fast', 'opt'] = 'opt',
     lambda_tv: float = 1e-2,
     verbose: bool = False,
+    progress_callback=None,
 ):
     """
     Bake texture to a mesh from multiple observations.
@@ -542,12 +546,12 @@ def bake_texture(
         texture_weights = torch.zeros((texture_size * texture_size), dtype=torch.float32).cuda()
         faces_long = faces.long()
         face_uvs = uvs[faces_long]  # (F, 3, 2)
-        for observation_cpu, mask_cpu, view_cpu, projection_cpu in tqdm(
+        for bake_idx, (observation_cpu, mask_cpu, view_cpu, projection_cpu) in enumerate(tqdm(
             zip(observations_cpu, masks_cpu, views_cpu, projections_cpu),
             total=len(observations_cpu),
             disable=not verbose,
             desc='Texture baking (fast)',
-        ):
+        )):
             observation = observation_cpu.to(device)
             mask_src = mask_cpu.to(device)
             view = view_cpu.to(device)
@@ -571,6 +575,8 @@ def bake_texture(
             texture = texture.scatter_add(0, idx.view(-1, 1).expand(-1, 3), obs)
             texture_weights = texture_weights.scatter_add(0, idx, torch.ones((obs.shape[0]), dtype=torch.float32, device=texture.device))
             del observation, mask_src, view, projection, uv_map, mask, obs, idx
+            if progress_callback is not None:
+                progress_callback(bake_idx, len(observations_cpu))
 
         mask = texture_weights > 0
         texture[mask] /= texture_weights[mask][:, None]

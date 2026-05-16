@@ -1,4 +1,5 @@
 import os
+import sys
 import torch
 import numpy as np
 from PIL import Image
@@ -35,25 +36,63 @@ def _expand_image_inputs(image_path: str) -> tuple[list[str], bool]:
 
 _CKPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ckpts')
 
+def _ensure_dsine_repo():
+    cached_repo = os.path.join(torch.hub.get_dir(), 'hugoycj_DSINE-hub_main')
+    if not os.path.isdir(cached_repo):
+        print("Downloading DSINE hub repo (requires network)...")
+        torch.hub.load("hugoycj/DSINE-hub:main", "DSINE", trust_repo=True)
+    return cached_repo
+
+
+def _register_dsine_namespaces(dsine_repo):
+    """
+    Pre-register DSINE's bare `utils` and `models` namespace packages so that
+    internal `from utils.rotation import ...` resolves to DSINE's own files.
+    ComfyUI ships its own `utils` package which would shadow them otherwise.
+    torch.hub._load_local removes the repo from sys.path before calling the
+    entry function, so we bypass torch.hub entirely and load hubconf directly.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    def _ns(name, directory):
+        if name not in sys.modules:
+            spec = importlib.machinery.ModuleSpec(name, None, is_package=True)
+            spec.submodule_search_locations = [directory]
+            sys.modules[name] = importlib.util.module_from_spec(spec)
+
+    def _mod(name, filepath):
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, filepath)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)
+
+    _ns('utils',              os.path.join(dsine_repo, 'utils'))
+    _mod('utils.rotation',    os.path.join(dsine_repo, 'utils', 'rotation.py'))
+    _ns('models',             os.path.join(dsine_repo, 'models'))
+    _mod('models.submodules', os.path.join(dsine_repo, 'models', 'submodules.py'))
+    _mod('models.dsine',      os.path.join(dsine_repo, 'models', 'dsine.py'))
+
+
 def load_dsine(device='cuda'):
+    import importlib.util
+
+    cached_repo = _ensure_dsine_repo()
     ckpt_path = os.path.join(_CKPTS_DIR, 'dsine', 'dsine.pt')
-    hub_kwargs = {}
+
+    _register_dsine_namespaces(cached_repo)
+
+    spec = importlib.util.spec_from_file_location(
+        '_dsine_hubconf', os.path.join(cached_repo, 'hubconf.py'))
+    hubconf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hubconf)
+
+    kwargs = {}
     if os.path.exists(ckpt_path):
-        hub_kwargs['local_file_path'] = ckpt_path
-
-    # Prefer cached hub repo to avoid network access
-    hub_dir = torch.hub.get_dir()
-    cached_repo = os.path.join(hub_dir, 'hugoycj_DSINE-hub_main')
-
-    if os.path.isdir(cached_repo):
-        print(f"Loading DSINE from cached hub repo: {cached_repo}")
-        predictor = torch.hub.load(cached_repo, "DSINE", source='local',
-                                   trust_repo=True, **hub_kwargs)
-    else:
-        print("Loading DSINE via torch.hub (requires network)...")
-        predictor = torch.hub.load("hugoycj/DSINE-hub:main", "DSINE",
-                                   trust_repo=True, **hub_kwargs)
-    return predictor
+        kwargs['local_file_path'] = ckpt_path
+    print(f"Loading DSINE from {cached_repo}")
+    return hubconf.DSINE(**kwargs)
 
 def estimate_normal(image, predictor, device='cuda'):
     # image: PIL Image RGB

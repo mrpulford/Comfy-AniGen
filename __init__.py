@@ -126,12 +126,31 @@ class AniGenImageTo3D:
         from PIL import Image as PILImage
         import folder_paths
         import time
+        from comfy.utils import ProgressBar
 
         from anigen.utils.export_utils import convert_to_glb_from_data, visualize_skeleton_as_mesh
 
         # ComfyUI IMAGE tensor: (B, H, W, C) float32 [0,1] — take first frame
         img_np = (image[0].cpu().numpy() * 255).astype(np.uint8)
         pil_image = PILImage.fromarray(img_np)
+
+        _PP_TICKS = 100
+        pbar = ProgressBar(ss_steps + slat_steps + _PP_TICKS)
+
+        def _ss_cb(step_idx, total_steps):
+            pbar.update(1)
+
+        def _slat_cb(step_idx, total_steps):
+            pbar.update(1)
+
+        _pp_done_ticks = [0]
+
+        def _pp_cb(frac, desc):
+            target = round(frac * _PP_TICKS)
+            delta = target - _pp_done_ticks[0]
+            if delta > 0:
+                pbar.update(delta)
+                _pp_done_ticks[0] = target
 
         with torch.no_grad():
             result = pipeline.run(
@@ -147,6 +166,9 @@ class AniGenImageTo3D:
                 no_smooth_skin_weights=not smooth_skin,
                 smooth_skin_weights_iters=smooth_iters,
                 texture_size=texture_size,
+                ss_progress_callback=_ss_cb,
+                slat_progress_callback=_slat_cb,
+                postprocess_progress_callback=_pp_cb,
             )
 
         output_dir = folder_paths.get_output_directory()

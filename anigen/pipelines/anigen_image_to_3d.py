@@ -65,7 +65,8 @@ class AnigenImageTo3DPipeline(Pipeline):
         # Image Cond Model (DINOv2)
         # Load architecture without weights (pretrained=False) to avoid torch.hub
         # trying to fetch a relative ./ckpts/... path as a URL, then apply weights manually.
-        _ckpts = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ckpts'))
+        _plugin_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+        _ckpts = os.path.join(_plugin_dir, 'ckpts')
         dinov2_model = torch.hub.load(os.path.join(_ckpts, 'dinov2'), 'dinov2_vitl14_reg', pretrained=False, source='local')
         _dinov2_weights = os.path.join(_ckpts, 'dinov2', 'dinov2_vitl14', 'dinov2_vitl14_reg4_pretrain.pth')
         dinov2_model.load_state_dict(torch.load(_dinov2_weights, map_location='cpu'))
@@ -78,9 +79,11 @@ class AnigenImageTo3DPipeline(Pipeline):
         # SLat Flow Model
         slat_model, slat_config = load_model_from_path(slat_flow_path, model_name_in_config='denoiser', device=device, use_ema=use_ema)
         
-        # SLat Decoder
+        # SLat Decoder — paths in config.json are relative to the plugin root
         slat_dec_path = slat_config.dataset.args.get('slat_dec_path')
         slat_dec_ckpt = slat_config.dataset.args.get('slat_dec_ckpt')
+        if slat_dec_path and not os.path.isabs(slat_dec_path):
+            slat_dec_path = os.path.join(_plugin_dir, slat_dec_path)
         print(f"Loading SLat Decoder from {slat_dec_path}...")
         slat_decoder = load_decoder(slat_dec_path, slat_dec_ckpt, device)
 
@@ -90,6 +93,8 @@ class AnigenImageTo3DPipeline(Pipeline):
         # SS Decoder
         ss_dec_path = ss_config.dataset.args.get('ss_dec_path')
         ss_dec_ckpt = ss_config.dataset.args.get('ss_dec_ckpt')
+        if ss_dec_path and not os.path.isabs(ss_dec_path):
+            ss_dec_path = os.path.join(_plugin_dir, ss_dec_path)
         print(f"Loading SS Decoder from {ss_dec_path}...")
         ss_decoder = load_decoder(ss_dec_path, ss_dec_ckpt, device)
 
@@ -479,9 +484,18 @@ class AnigenImageTo3DPipeline(Pipeline):
                 render_colors = barycentric_transfer_attributes(_orig_mesh, vertex_colors, new_vertices)
                 del _orig_mesh
 
+            _nviews = 100
+
+            def _render_cb(i, n):
+                _pp_progress(0.20 + (i + 1) / n * 0.35, "Rendering...")
+
+            def _bake_cb(i, n):
+                _pp_progress(0.55 + (i + 1) / n * 0.33, "Baking texture...")
+
             observations, extrinsics_np, intrinsics_np = render_multiview_mesh_colors(
                 new_vertices, new_faces, render_colors,
-                resolution=1024, nviews=100, verbose=True,
+                resolution=1024, nviews=_nviews, verbose=True,
+                progress_callback=_render_cb,
             )
             masks = [np.any(obs > 0, axis=-1) for obs in observations]
 
@@ -492,6 +506,7 @@ class AnigenImageTo3DPipeline(Pipeline):
                     texture_size=texture_size, mode='fast',
                     lambda_tv=0.01,
                     verbose=True,
+                    progress_callback=_bake_cb,
                 )
             texture_image = texture
             del observations, masks, extrinsics_np, intrinsics_np
