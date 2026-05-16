@@ -63,8 +63,12 @@ class AnigenImageTo3DPipeline(Pipeline):
         print("Loading models...")
         
         # Image Cond Model (DINOv2)
-        _ckpts = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ckpts')
-        dinov2_model = torch.hub.load(os.path.join(_ckpts, 'dinov2'), 'dinov2_vitl14_reg', pretrained=True, source='local')
+        # Load architecture without weights (pretrained=False) to avoid torch.hub
+        # trying to fetch a relative ./ckpts/... path as a URL, then apply weights manually.
+        _ckpts = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ckpts'))
+        dinov2_model = torch.hub.load(os.path.join(_ckpts, 'dinov2'), 'dinov2_vitl14_reg', pretrained=False, source='local')
+        _dinov2_weights = os.path.join(_ckpts, 'dinov2', 'dinov2_vitl14', 'dinov2_vitl14_reg4_pretrain.pth')
+        dinov2_model.load_state_dict(torch.load(_dinov2_weights, map_location='cpu'))
         dinov2_model.to(device).eval()
 
         # DSINE Model
